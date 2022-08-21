@@ -1,0 +1,44 @@
+syntax = "proto3";
+option go_package = "pb/NodeAgent";
+import "ComMessage/ComMessage.proto";
+
+package NodeAgent;
+
+service NodeAgent {
+    rpc Node_Agent_GetSingleServiceList(SingleServiceListReq)  returns (ServicesList)    {}
+	rpc Node_Agent_GetServicesChangeList(ServicesChangeListReq)  returns (ServicesChangeListRsp)    {}
+}
+
+message SingleServiceListReq{
+    string ServiceName = 1;
+    ComMessage.CBSType cbsType = 2;
+}
+
+message SingleServiceListRsp{
+	string ServiceName = 1;
+    int64  ServiceVersion = 2;
+    repeated ServiceInfo ServiceList = 3;
+}
+
+message ServicesChangeListReq{
+    repeated ServicesList CheckList = 1;
+}
+
+message ServicesChangeListRsp{
+    repeated ServicesList ChangeList = 1;
+}
+
+message ServicesList{
+    string ServiceName = 1;
+	string ServiceVersion = 2;
+	repeated ServiceInfo Info = 3;
+	ComMessage.CBSType cbsType = 4;
+}
+
+message ServiceInfo{
+	string ServiceID = 1;
+	string ServiceIP = 2;
+	int64  ServicePort = 3;
+	string ServiceStatus = 4;
+	string PackageName = 5;
+}

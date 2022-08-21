@@ -1,0 +1,12 @@
+syntax = "proto3";
+
+package ComMessage;
+option go_package = "pb/ComMessage";
+
+//call business system type
+enum CBSType {
+    Own = 0;
+    Base = 1;
+//    HotMall = 2;
+//    GCard = 3;
+}

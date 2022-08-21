@@ -1,0 +1,24 @@
+syntax = "proto3";
+
+package AASMessage;
+option go_package = "pb/AASMessage";
+
+message InvokeServiceRequest {
+	string appKey = 1; // App提供
+    string appVer = 2; // App版本号
+    string id = 3;
+    string token = 4; //App提供
+    int64  userType =5; // 判断是否验证token ‘33333’不验
+    string data = 6; //App调用服务参数
+
+    string idFromToken = 7; // 从token解密出的 id
+    // 目前内部调用和外部调用用的是统一proto, 以下两个字段要保留   by jeffrey
+    string serviceName = 8; //需要调用Service名称
+    string methodName = 9; //需要调用方法名称
+    //int64  timeStamp = 10; //时间戳
+    //string srcIP = 11; //客户端IP
+}
+
+message InvokeServiceResponse {
+    string serviceResponseData = 1; //Service返回结果
+}

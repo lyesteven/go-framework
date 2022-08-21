@@ -1,0 +1,9 @@
+syntax = "proto3";
+
+package AASManager;
+option go_package = "pb/AASManager";
+import "AASMessage/AASMessage.proto";
+
+service AASManager {
+    rpc InvokeServiceByAAS(AASMessage.InvokeServiceRequest)  returns (AASMessage.InvokeServiceResponse)    {}
+}

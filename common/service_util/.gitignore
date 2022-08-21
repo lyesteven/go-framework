@@ -1,0 +1,12 @@
+.idea/
+.DS_Store
+
+# Binaries for programs and plugins
+*.dll
+*.so
+
+# Test binary, built with `go test -c`
+*.test
+
+*~
+go.sum

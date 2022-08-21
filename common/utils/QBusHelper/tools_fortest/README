@@ -1,0 +1,6 @@
+一、测试准备：
+1. 拷贝 consul 和 nats-streaming-server 到当前目录
+2. 编译当前目录下的 sendmsg.go, pubtool/pubTestTool.go, suptool/subTestTool.go
+(注意:执行文件名要与源文件名相同)
+
+二、在上级 QBusHelper 目录下运行 go test -v 

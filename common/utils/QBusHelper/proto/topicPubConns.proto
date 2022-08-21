@@ -1,0 +1,16 @@
+syntax = "proto3";
+package topicPubConns;
+
+message conn {
+    string clusterID =1;
+}
+
+message allconns {
+    repeated conn conns =1;
+}
+
+message delaymsg {
+    int32 dcID =1;
+    string topic =2;
+    bytes msg =3;
+}

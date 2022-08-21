@@ -1,0 +1,17 @@
+{
+	"datacenter": "base",
+	"data_dir": "./data/consul",
+	"node_name": "stst",
+	"server": true,
+	"bootstrap_expect": 1,
+	"client_addr": "0.0.0.0",
+	"ui": true,
+	"ports": {  
+		"http": 18500,
+		"dns": 18600,
+		"serf_lan": 18301,
+		"serf_wan": 18302, 
+		"server": 18300
+	}
+}
+

@@ -493,9 +493,9 @@ func (u *ServiceUtil) GetWhiteServiceList(appKey string) map[string]string {
 //default dc name by proto enum String(), same to prd environment
 func (u *ServiceUtil) defaultDCName() {
 	u.dcItems[ComMessage.CBSType_Base] = strings.ToLower(ComMessage.CBSType_Base.String())
-	u.dcItems[ComMessage.CBSType_HotMall] = strings.ToLower(ComMessage.CBSType_HotMall.String())
-	u.dcItems[ComMessage.CBSType_GCard] = strings.ToLower(ComMessage.CBSType_GCard.String())
-	u.dcItems[ComMessage.CBSType_GHit] = strings.ToLower(ComMessage.CBSType_GHit.String())
+	//u.dcItems[ComMessage.CBSType_HotMall] = strings.ToLower(ComMessage.CBSType_HotMall.String())
+	//u.dcItems[ComMessage.CBSType_GCard] = strings.ToLower(ComMessage.CBSType_GCard.String())
+	//u.dcItems[ComMessage.CBSType_GHit] = strings.ToLower(ComMessage.CBSType_GHit.String())
 }
 
 //获取多个dc_name配置信息
@@ -518,12 +518,12 @@ func (u *ServiceUtil) getDcNameMapInfo() error {
 		switch v.Key {
 		case MultiDC_Prefix + "/dc_base":
 			u.dcItems[ComMessage.CBSType_Base] = string(v.Value)
-		case MultiDC_Prefix + "/dc_hotmall":
-			u.dcItems[ComMessage.CBSType_HotMall] = string(v.Value)
-		case MultiDC_Prefix + "/dc_gcard":
-			u.dcItems[ComMessage.CBSType_GCard] = string(v.Value)
-		case MultiDC_Prefix + "/dc_ghit":
-			u.dcItems[ComMessage.CBSType_GHit] = string(v.Value)
+		//case MultiDC_Prefix + "/dc_hotmall":
+		//	u.dcItems[ComMessage.CBSType_HotMall] = string(v.Value)
+		//case MultiDC_Prefix + "/dc_gcard":
+		//	u.dcItems[ComMessage.CBSType_GCard] = string(v.Value)
+		//case MultiDC_Prefix + "/dc_ghit":
+		//	u.dcItems[ComMessage.CBSType_GHit] = string(v.Value)
 		}
 	}
 

@@ -1,6 +1,6 @@
 module github.com/lyesteven/GoFrameWork/common/bjwt
 
-go 1.14
+go 1.16
 
 require (
 	github.com/json-iterator/go v1.1.11 // indirect

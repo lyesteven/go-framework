@@ -1,4 +1,4 @@
-module github.com/lyesteven/GoFrameWork/common/bjwt
+module github.com/lyesteven/go-framework/common/bjwt
 
 go 1.16
 

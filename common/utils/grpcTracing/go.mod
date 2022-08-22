@@ -1,3 +1,3 @@
-module gworld/git/GoFrameWork/common/utils/grpcTracing
+module github.com/lyesteven/go-framework/common/utils/grpcTracing
 
 go 1.16

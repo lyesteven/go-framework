@@ -6,8 +6,8 @@ import (
 	"net"
 	"time"
 
-	gtrace "gworld/git/GoFrameWork/common/utils/grpcTracing"
-	pb "gworld/git/GoFrameWork/common/utils/grpcTracing/examples/helloworld/proto"
+	gtrace "github.com/lyesteven/go-framework/common/utils/grpcTracing"
+	pb "github.com/lyesteven/go-framework/common/utils/grpcTracing/examples/helloworld/proto"
 	gm "github.com/grpc-ecosystem/go-grpc-middleware"
 	log "github.com/xiaomi-tc/log15"
 	"google.golang.org/grpc"

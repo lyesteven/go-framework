@@ -2,8 +2,8 @@ package service_util
 
 import (
 	"sync"
-	"gworld/git/GoFrameWork/pb/ComMessage"
-	pbng "gworld/git/GoFrameWork/pb/NodeAgent"
+	"github.com/lyesteven/go-framework/pb/ComMessage"
+	pbng "github.com/lyesteven/go-framework/pb/NodeAgent"
 )
 
 type ServiceInfo struct {

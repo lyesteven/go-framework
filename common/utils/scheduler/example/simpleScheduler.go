@@ -2,7 +2,7 @@ package main
 
 import (
 	"fmt"
-	"gworld/git/GoFrameWork/common/utils/scheduler"
+	"github.com/lyesteven/go-framework/common/utils/scheduler"
 	"time"
 )
 

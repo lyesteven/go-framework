@@ -7,8 +7,8 @@ import (
 	"strconv"
 
 	log "github.com/xiaomi-tc/log15"
-	gtrace "gworld/git/GoFrameWork/common/utils/grpcTracing"
-	pb "gworld/git/GoFrameWork/common/utils/grpcTracing/examples/helloworld/proto"
+	gtrace "github.com/lyesteven/go-framework/common/utils/grpcTracing"
+	pb "github.com/lyesteven/go-framework/common/utils/grpcTracing/examples/helloworld/proto"
 	"google.golang.org/grpc"
 	gm "github.com/grpc-ecosystem/go-grpc-middleware"
 )

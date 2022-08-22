@@ -7,7 +7,7 @@ package mq_gorm
 //3.调用 PublishTransMsg 函数发送事务性消息。
 
 import (
-	qbh "gworld/git/GoFrameWork/common/utils/QBusHelper"
+	qbh "github.com/lyesteven/go-framework/common/utils/QBusHelper"
 	"github.com/jinzhu/gorm"
 	_ "github.com/jinzhu/gorm/dialects/mysql"
 	"github.com/juju/errors"

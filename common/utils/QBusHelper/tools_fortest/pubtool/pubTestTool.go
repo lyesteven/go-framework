@@ -3,8 +3,8 @@ package main
 import (
 	"flag"
 	"fmt"
-	su "gworld/git/GoFrameWork/common/service_util"
-	qbh "gworld/git/GoFrameWork/common/utils/QBusHelper"
+	su "github.com/lyesteven/go-framework/common/service_util"
+	qbh "github.com/lyesteven/go-framework/common/utils/QBusHelper"
 	"github.com/hashicorp/consul/api"
 	log "github.com/xiaomi-tc/log15"
 	"net"

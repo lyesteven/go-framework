@@ -2,8 +2,8 @@ package main
 
 import (
 	"fmt"
-	"gworld/git/GoFrameWork/common/utils/observer/event"
-	"gworld/git/GoFrameWork/common/utils/observer/notifier"
+	"github.com/lyesteven/go-framework/common/utils/observer/event"
+	"github.com/lyesteven/go-framework/common/utils/observer/notifier"
 )
 
 type simpleEvent struct{}

@@ -2,9 +2,9 @@ package utils
 
 import (
 	"errors"
-	gtrace "gworld/git/GoFrameWork/common/utils/grpcTracing"
-	su "gworld/git/GoFrameWork/common/service_util"
-	"gworld/git/GoFrameWork/pb/ComMessage"
+	gtrace "github.com/lyesteven/go-framework/common/utils/grpcTracing"
+	su "github.com/lyesteven/go-framework/common/service_util"
+	"github.com/lyesteven/go-framework/pb/ComMessage"
 	gm "github.com/grpc-ecosystem/go-grpc-middleware"
 	"github.com/opentracing/opentracing-go"
 	log "github.com/xiaomi-tc/log15"

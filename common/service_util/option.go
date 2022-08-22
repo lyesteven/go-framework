@@ -1,6 +1,6 @@
 package service_util
 
-import "gworld/git/GoFrameWork/pb/ComMessage"
+import "github.com/lyesteven/go-framework/pb/ComMessage"
 
 type Option func(u *ServiceUtil)
 

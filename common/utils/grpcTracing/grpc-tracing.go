@@ -5,7 +5,7 @@ import (
 	"errors"
 	"io"
 
-	//"gworld/git/GoFrameWork/common/utils/global_config"
+	//"github.com/lyesteven/go-framework/common/utils/global_config"
 	"github.com/nats-io/nuid"
 	"github.com/opentracing/opentracing-go"
 	"github.com/opentracing/opentracing-go/ext"
@@ -38,7 +38,7 @@ func NewJaegerTracerWithPlatformPrefix(serviceName string, jagentHost string, op
 //	} else {
 //		return NewJaegerTracer(company+"-"+plat+"-"+serviceName, jagentHost, opts...)
 //	}
-	return NewJaegerTracer("gworld-base-"+serviceName, jagentHost, opts...)
+	return NewJaegerTracer("lyesteven-base-"+serviceName, jagentHost, opts...)
 }
 
 // NewJaegerTracer NewJaegerTracer for current service

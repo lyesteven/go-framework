@@ -31,9 +31,9 @@ func GetPlatformUrl(platform string) (string, error) {
 func init() {
 	var yml string
 	if runtime.GOOS == "windows" {
-		yml = "c:\\etc\\gworld\\GlobalConfigure.yaml"
+		yml = "c:\\etc\\lyesteven\\go-framework\\GlobalConfigure.yaml"
 	} else {
-		yml = "/etc/gworld/GlobalConfigure.yaml"
+		yml = "/etc/lyesteven/go-framework/GlobalConfigure.yaml"
 	}
 
 	loadConfigOnce.Do(func() {

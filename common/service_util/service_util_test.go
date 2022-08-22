@@ -2,7 +2,7 @@ package service_util
 
 import (
 	"testing"
-	"gworld/git/GoFrameWork/pb/ComMessage"
+	"github.com/lyesteven/go-framework/pb/ComMessage"
 	"fmt"
 	"time"
 )
@@ -34,7 +34,7 @@ func TestNewServiceUtilForSearch(t *testing.T) {
 }
 
 func TestServiceUtil_RegistService(t *testing.T) {
-	su, port := NewServiceUtil("Test", "C:\\etc\\gworld\\modules\\TestService\\TestService.yaml")
+	su, port := NewServiceUtil("Test", "C:\\etc\\lyesteven\\go-framework\\modules\\TestService\\TestService.yaml")
 	su.RegistService("Test", "Test")
 	fmt.Printf("port:%d\n", port)
 	//su.UnRegistAllService()

@@ -7,7 +7,7 @@ package mq
 //3.调用 PublishTransMsg 函数发送事务性消息；
 
 import (
-	qbh "gworld/git/GoFrameWork/common/utils/QBusHelper"
+	qbh "github.com/lyesteven/go-framework/common/utils/QBusHelper"
 	_ "github.com/go-sql-driver/mysql"
 	"github.com/jmoiron/sqlx"
 	"github.com/juju/errors"

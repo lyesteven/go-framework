@@ -12,11 +12,11 @@
   执行: echo $GOPATH
   如果为空或不正确,执行: export GOPATH=正确的gopath  (建议将此句写入~/.bashrc的最后一行)
 
-3.  复制　$GOPATH/src/gworld/git/GoFrameWork/common/modMakefile 下的"Makefile" 和".gitignore" 到项目工作目录
-  例：　cp $GOPATH/src/gworld/git/GoFrameWork/common/modMakefile/Makefile  $myservice-path
-        cp $GOPATH/src/gworld/git/GoFrameWork/common/modMakefile/.gitignore $myservice-path
+3.  复制　$GOPATH/src/github.com/lyesteven/go-framework/common/modMakefile 下的"Makefile" 和".gitignore" 到项目工作目录
+  例：　cp $GOPATH/src/github.com/lyesteven/go-framework/common/modMakefile/Makefile  $myservice-path
+        cp $GOPATH/src/github.com/lyesteven/go-framework/common/modMakefile/.gitignore $myservice-path
 
-4．第一次使用Mod方式需要建立 gworld/git　相关的依赖．(只第一次设置Mod时需要，以后项目中不需要!!!)
+4．第一次使用Mod方式需要建立 github.com/lyesteven　相关的依赖．(只第一次设置Mod时需要，以后项目中不需要!!!)
   执行： make clearall; make initbase
 
 
@@ -52,11 +52,11 @@ OK!
 
 三. Q&A:
 
-1. 如果GoFrameWork 下的基础库有增改, 需要重建 gworld/git 相关的依赖
+1. 如果go-framework 下的基础库有增改, 需要重建 github.com/lyesteven 相关的依赖
 	执行： make initbase
 
 2. 做过一次 "准备" 操作,　在另外的项目中的使用:
-    先复制 $GOPATH/src/gworld/git/GoFrameWork/common/modMakefile
+    先复制 $GOPATH/src/github.com/lyesteven/go-framework/common/modMakefile
 下的"Makefile" 和".gitignore" 到项目工作目录 (参见 "准备"->3步)
 　　按照　"使用"中的说明操作
 

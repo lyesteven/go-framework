@@ -13,8 +13,8 @@ import (
 
 //type map_Config map[string]map[string]interface{}
 var (
-	strGlobalConfigPath = "/etc/gworld/GlobalConfigure.yaml"
-	strYamlRootPath     = "/etc/gworld/modules/"
+	strGlobalConfigPath = "/etc/go-framework/GlobalConfigure.yaml"
+	strYamlRootPath     = "/etc/go-framework/modules/"
 
 	vipConf	*viper.Viper
 )

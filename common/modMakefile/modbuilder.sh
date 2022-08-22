@@ -1,14 +1,14 @@
 #!/bin/sh
-TOPPATH=$GOPATH/src/gworld/git/GoFrameWork
-ONEPKG=gworld/git/third-package/satori/go.uuid
+TOPPATH=$GOPATH/src/github.com/lyesteven/go-framework
+ONEPKG=github.com/lyesteven/third-package/satori/go.uuid
 OLDPWD=$PWD
-INCFILE=/tmp/gworldBaseModFiles
+INCFILE=/tmp/lyestevenBaseModFiles
 TEMPFILE=__tmpdata
 
 function cleanMod()
 {
 	rm -f "$INCFILE"
-	`find $GOPATH/src/gworld/git -type f \( -name "go.mod" -or -name "go.sum" \) -exec rm -f {} \;`
+	`find $GOPATH/src/github.com/lyesteven -type f \( -name "go.mod" -or -name "go.sum" \) -exec rm -f {} \;`
 }
 
 function gomodinit()
@@ -64,7 +64,7 @@ function checkBaseMod()
 function tidyModFile()
 {
 	#echo -e "\n\n`cat go.mod`"
-	for name in `cat go.mod |grep "gworld" | awk '{print $1}' | sort |uniq -c | sort -n | awk '$1<2 {print $2}'|awk -F'/' '{print$(NF-1)"\\\/"$NF}'`
+	for name in `cat go.mod |grep "lyesteven" | awk '{print $1}' | sort |uniq -c | sort -n | awk '$1<2 {print $2}'|awk -F'/' '{print$(NF-1)"\\\/"$NF}'`
 	do
 		#echo "============== $name"
 		`sed -i "/^module /b; /$name/d" go.mod`
@@ -77,11 +77,11 @@ function depend()
 	#echo "begin depend()"
 	#删除 "replace (" 后的所有行
 	`sed -i '/replace (/,$d' go.mod`
-	#删除所有 "gworld/git/...." 依赖
-	`sed -i "/^module /b; /gworld\/git/d" go.mod`
+	#删除所有 "github.com/lyesteven/...." 依赖
+	`sed -i "/^module /b; /github.com\/lyesteven/d" go.mod`
 
 	currentpath=`pwd`
-	for name in `go mod tidy 2>&1 | grep gworld | grep -E '(package|malformed)' | awk -F':' '{print $1}'` 
+	for name in `go mod tidy 2>&1 | grep lyesteven | grep -E '(package|malformed)' | awk -F':' '{print $1}'` 
 	do 
 		echo -e "\t $name => ${GOPATH}/src/$name " >> $TEMPFILE
 		if [[ ! -e "${GOPATH}/src/$name/go.mod" ]]; then

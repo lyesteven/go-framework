@@ -2,7 +2,7 @@ package service_util
 
 import (
 	"fmt"
-	"gworld/git/third-package/satori/go.uuid"
+	"github.com/lyesteven/go-framework/third-package/satori/go.uuid"
 	log "github.com/xiaomi-tc/log15"
 	"net"
 	"net/http"

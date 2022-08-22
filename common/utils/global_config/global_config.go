@@ -20,7 +20,7 @@ func Init() {
 		if runtime.GOOS == "windows" {
 			yml = "c:\\etc\\GlobalConfigure.yaml"
 		} else {
-			yml = "/etc/gworld/GlobalConfigure.yaml"
+			yml = "/etc/lyesteven/go-framework/GlobalConfigure.yaml"
 		}
 
 		var err error

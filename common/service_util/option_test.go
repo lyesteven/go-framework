@@ -3,7 +3,7 @@ package service_util
 import (
 	"testing"
 	"github.com/stretchr/testify/assert"
-	"gworld/git/GoFrameWork/pb/ComMessage"
+	"github.com/lyesteven/go-framework/pb/ComMessage"
 )
 
 func TestWithConsulSrvAddr(t *testing.T) {

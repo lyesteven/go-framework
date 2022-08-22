@@ -3,8 +3,8 @@ package notifier
 import (
 	"errors"
 	"fmt"
-	"gworld/git/GoFrameWork/common/utils/observer/event"
-	"gworld/git/GoFrameWork/common/utils/observer/observer"
+	"github.com/lyesteven/go-framework/common/utils/observer/event"
+	"github.com/lyesteven/go-framework/common/utils/observer/observer"
 	"sync"
 )
 

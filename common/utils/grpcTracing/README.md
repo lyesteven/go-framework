@@ -18,7 +18,7 @@ import (
 	"os"	
     log "github.com/xiaomi-tc/log15"
 
-	gtrace "gworld/git/GoFrameWork/common/utils/grpcTracing"
+	gtrace "github.com/lyesteven/go-framework/common/utils/grpcTracing"
 	"google.golang.org/grpc"
 )
 

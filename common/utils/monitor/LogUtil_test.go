@@ -1,7 +1,7 @@
 package monitor
 
 import (
-	"gworld/git/GoFrameWork/pb/ComMessage"
+	"github.com/lyesteven/go-framework/pb/ComMessage"
 	"testing"
 )
 

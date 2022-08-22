@@ -1,9 +1,9 @@
 package main
 
 import (
-	su "gworld/git/GoFrameWork/common/service_util"
-	qbh "gworld/git/GoFrameWork/common/utils/QBusHelper"
-	"gworld/git/GoFrameWork/pb/ComMessage"
+	su "github.com/lyesteven/go-framework/common/service_util"
+	qbh "github.com/lyesteven/go-framework/common/utils/QBusHelper"
+	"github.com/lyesteven/go-framework/pb/ComMessage"
 	log "github.com/xiaomi-tc/log15"
 	"net"
 	"strconv"

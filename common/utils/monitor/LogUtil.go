@@ -2,7 +2,7 @@ package monitor
 
 import (
 	"encoding/json"
-	"gworld/git/GoFrameWork/pb/ComMessage"
+	"github.com/lyesteven/go-framework/pb/ComMessage"
 	"github.com/pkg/errors"
 	"github.com/shirou/gopsutil/cpu"
 	"github.com/shirou/gopsutil/disk"

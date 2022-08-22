@@ -1,3 +1,3 @@
-module gworld/git/GoFrameWork/common/utils/grpcUtility
+module github.com/lyesteven/go-framework/common/utils/grpcUtility
 
-go 1.14
+go 1.16

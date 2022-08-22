@@ -2,9 +2,9 @@ package main
 
 import (
 	"fmt"
-	su "gworld/git/GoFrameWork/common/service_util"
-	"gworld/git/GoFrameWork/pb/ComMessage"
-	qbh "gworld/git/GoFrameWork/common/utils/QBusHelper"
+	su "github.com/lyesteven/go-framework/common/service_util"
+	"github.com/lyesteven/go-framework/pb/ComMessage"
+	qbh "github.com/lyesteven/go-framework/common/utils/QBusHelper"
 	"github.com/nats-io/go-nats-streaming"
 	log "github.com/xiaomi-tc/log15"
 	"os"

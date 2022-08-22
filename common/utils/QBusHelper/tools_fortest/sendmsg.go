@@ -7,7 +7,7 @@ import (
 	"os"
 	"strconv"
 	log "github.com/xiaomi-tc/log15"
-	su "gworld/git/GoFrameWork/common/service_util"
+	su "github.com/lyesteven/go-framework/common/service_util"
 	"time"
 )
 

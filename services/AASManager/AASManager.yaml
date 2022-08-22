@@ -1,0 +1,18 @@
+port: !!int 20000
+IsCachedService: !!bool true
+MaxConcurrency: !!int 2000
+JagentHost: !!str 127.0.0.1:6831
+TraceSampleDefault: 1.0
+LogLevel: info
+TrackList_All:
+  - WDGP_UserCenter_Login
+  - WDGP_UserCenter_V2
+TrackList_NO:
+  - AAA
+
+GcarcLoginRedis:
+    db: 12
+    host: 192.168.66.163:6379
+    name: weibo
+    password: Gw_redis_2018
+    prefix: weibologin_

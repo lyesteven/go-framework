@@ -1,0 +1,4 @@
+port: !!int 30030
+
+#业务系统名称
+dc_base: !!str base

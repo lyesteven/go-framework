@@ -1,3 +1,3 @@
-module github.com/lyesteven/common/third-package/satori/go.uuid
+module github.com/lyesteven/go-framework/common/third-package/satori/go.uuid
 
 go 1.16

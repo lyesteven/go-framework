@@ -1,4 +1,4 @@
-module service_util
+module github.com/lyesteven/go-framework/common/service_util
 
 go 1.16
 
@@ -13,7 +13,6 @@ require (
 	golang.org/x/net v0.0.0-20210405180319-a5a99cb37ef4
 	google.golang.org/grpc v1.38.0
 	gopkg.in/natefinch/lumberjack.v2 v2.0.0 // indirect
-	github.com/lyesteven/go-framework/third-package/satori/go.uuid v0.0.0-00010101000000-000000000000
 )
 
 replace (

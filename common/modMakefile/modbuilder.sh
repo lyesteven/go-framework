@@ -1,6 +1,6 @@
 #!/bin/sh
 TOPPATH=$GOPATH/src/github.com/lyesteven/go-framework
-ONEPKG=github.com/lyesteven/third-package/satori/go.uuid
+ONEPKG=github.com/lyesteven/go-framework/common/third-package/satori/go.uuid
 OLDPWD=$PWD
 INCFILE=/tmp/lyestevenBaseModFiles
 TEMPFILE=__tmpdata

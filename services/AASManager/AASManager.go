@@ -31,7 +31,7 @@ type stHttpFormat struct { // modified by jeffrey
 
 	// 服务端设置字段
 	// 这里修改为不由客户端上传,而在收包时设置 (httpCompact.go)
-	TimeStamp   int64	//`json:"timestamp"`
+	TimeStamp int64 //`json:"timestamp"`
 	// 从Token中解出的ID，用于与ID对比判断
 	IdFromToken string
 	// 说明: 根据程序逻辑servicename 和 methodname 必须保留，否则程序改动过大
@@ -53,25 +53,30 @@ func (s *stHttpFormat) InvokeServiceByAAS() (string, error) {
 		log.Info("InvokeServiceByAAS", "request", *s)
 	} else {
 		log.Info("InvokeServiceByAAS", "ServiceName", s.ServiceName, "MethodName", s.MethodName,
-			"AppKey", s.AppKey, "Uuid", s.Id, "ClientType", s.ClientType)
+			"AppKey", s.AppKey, "Uuid", s.Id, "ClientType", s.ClientType, "UserType", s.UserType)
 	}
 
 	newToken := ""
 
+	noNeedCheck := false
+	svc := s.ServiceName + ":" + s.MethodName //example: 'BaseSvcs:WXLogin'
+	if _, ok := NoCheckTokenSvcsMap[svc]; ok {
+		noNeedCheck = true
+	}
+
 	// token的校验
-	//if s.UserType != NoNeedCheckToken {	// if UserType==33333, no need check token
-	if s.UserType != Tourist && s.UserType != InternalSysCaller { // if UserType==33333,587643 no need check token
+	if s.UserType != Tourist && s.UserType != InternalSysCaller && !noNeedCheck { // if UserType==33333,587643 no need check token
 		// check token first
 		aboutToken, hs, cs, _ := bjwt.CheckToken(s.Token)
 		switch aboutToken {
 		case 0:
 		case 1:
 			return Forbidden, errors.New("token无效")
-			case 2: //在正常token，但过期了, 这里给token续期
+		case 2: //在正常token，但过期了, 这里给token续期. (如果将来做过期退出的返回，前端要求将错误码定义成401 !!!)
 			newToken = bjwt.RefreshToken(hs, cs)
-			case 3: //正常的临时token
-			//在用户是临时匿名token的情况下，应该由登录业务返回新token
-			case 100: //临时token且已过期
+		case 3: //正常的临时token
+		//在用户是临时匿名token的情况下，应该由登录业务返回新token
+		case 100: //临时token且已过期
 			return TSTimeOut, errors.New("临时token无效")
 		}
 		s.IdFromToken = bjwt.GetId(cs) //将解密后的id设置，给后面的业务使用

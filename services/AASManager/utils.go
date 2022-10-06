@@ -119,6 +119,13 @@ func loadLocalConfig(yamlPath string) (*viper.Viper, error) {
 	return config, err
 }
 
+func initNoCheckTokenSvcs() {
+	svcs := LocalConfig.GetStringSlice("NoCheckTokenServices")
+	for _,v := range svcs {
+		NoCheckTokenSvcsMap[v]=1
+	}
+}
+
 //func loadInitConfig(yamlPath string) (map[string]interface{}, error) {
 //	m := make(map[string]interface{})
 //

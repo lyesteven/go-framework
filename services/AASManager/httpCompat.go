@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"time"
+
 	"github.com/buger/jsonparser"
 )
 
@@ -45,13 +46,13 @@ func parseHttpFormatCompat(body []byte) (*stHttpFormat, []string, error) {
 			if dataType == jsonparser.String {
 				result = append(result, string(key))
 			}
-		//case "timestamp":
-		//	http_format.TimeStamp, err = jsonparser.ParseInt(value)
-		//	if dataType == jsonparser.String {
-		//		result = append(result, string(key))
-		//	}
-		//case "srcip":
-		//	http_format.SrcIP, err = jsonparser.ParseString(value)
+			//case "timestamp":
+			//	http_format.TimeStamp, err = jsonparser.ParseInt(value)
+			//	if dataType == jsonparser.String {
+			//		result = append(result, string(key))
+			//	}
+			//case "srcip":
+			//	http_format.SrcIP, err = jsonparser.ParseString(value)
 		}
 		return err
 	})

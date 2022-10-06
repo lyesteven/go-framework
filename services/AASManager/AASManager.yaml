@@ -16,3 +16,9 @@ GcarcLoginRedis:
     name: weibo
     password: Gw_redis_2018
     prefix: weibologin_
+
+NoCheckTokenServices:
+    - "BaseSvcs:GetSMSCode"
+    - "BaseSvcs:SMSLogin"
+    - "BaseSvcs:WXLogin"
+    - "BaseSvcs:FirstPageImages"

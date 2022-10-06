@@ -12,13 +12,16 @@ import (
 	"sync"
 )
 
-var logPath, logLevel, YamlPath string
 var serviceName, packageName = "AASManager", "AASManager"
-var sumanager *su.ServiceUtil
-var servId string = ""
-var rWG sync.WaitGroup
-var cleanupDone chan bool
-var LocalConfig *viper.Viper
+var (
+	logPath, logLevel, YamlPath string
+	sumanager *su.ServiceUtil
+	servId string = ""
+	rWG sync.WaitGroup
+	cleanupDone chan bool
+	LocalConfig *viper.Viper
+	NoCheckTokenSvcsMap = make(map[string]int)
+)
 
 func init() {
 	// 一个服务多个配置的情况有待处理
@@ -124,6 +127,9 @@ func main() {
 	if err != nil {
 		checkErr(err, "logInit error", true)
 	}
+
+	// 加载不检查 token 的服务白名单
+	initNoCheckTokenSvcs()
 
 	//get consul instance
 	sumanager, _ = su.NewServiceUtil(serviceName, YamlPath)

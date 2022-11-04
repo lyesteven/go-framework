@@ -1,0 +1,1340 @@
+package NatsHelper
+
+import (
+	"container/list"
+	"errors"
+	su "git.woda.ink/woda/common/service_util"
+	topicConns "git.woda.ink/woda/common/utils/QBusHelper/proto"
+	"git.woda.ink/woda/pb/ComMessage"
+	"github.com/golang/protobuf/proto"
+	"github.com/hashicorp/consul/api"
+	"github.com/nats-io/go-nats-streaming"
+	"github.com/xiaomi-tc/boltdb"
+	log "github.com/xiaomi-tc/log15"
+	"os"
+	"path"
+	"strconv"
+	"sync"
+	"sync/atomic"
+	"time"
+)
+
+type nsClusterAddr struct {
+	nsClusterID string // nats-streaming-server cluster id
+	IP          string // nats-streaming-server IP/Port
+	Port        int
+	isChecked   bool // use for list traverse
+}
+
+type subTopic struct {
+	topic     string          // topic to subscribt
+	qgroup    string          // queue group. if not null, use queue + durable mode
+	durable   string          // durable name.  client can continue from the same place when restart
+	hdnum     int             // the goroutime number for handler
+	manualAck bool            // is need respose ack in handler. default should be false
+	msgcb     stan.MsgHandler // call back function. will be called when received a msg from the topic channel
+}
+
+type pubConn struct {
+	nsClusterID string    // nats-streaming-server cluster id.  One cluster only one connection
+	nsConn      stan.Conn // connection to nats-streaming-server with nsClusterID for publish msg
+}
+
+type subConn struct {
+	nsClusterID string
+	topic       string
+	qgroup      string            // queue group. if not null, use queue + durable mode
+	durable     string            // msg store with durable name
+	sc          stan.Subscription // subscription within the nats-streaming cluster
+}
+
+type reqCmd struct {
+	cmd       string
+	dcID      ComMessage.CBSType // which consul dataCenter
+	topic     string             // topic to subscribt
+	qgroup    string             // queue group. if not null, use queue + durable mode
+	durable   string             // durable name.  client can continue from the same place when restart
+	hdnum     int                // the goroutime number for handler
+	startseq  uint64             // offset where to start to get the message from MQ.  0 means from new
+	manualAck bool               // true means handler response ACK to MQ. default is false
+	pubData   []byte             // publish data
+	msgcb     stan.MsgHandler
+}
+
+type dataCenter struct {
+	dcID              ComMessage.CBSType //other consul datacenter
+	listNSClusterAddr *list.List         // item is nsClusterAddr
+	listPublishConn   *list.List         // item is pubConn
+	listSubTopic      *list.List         // item is subTopic
+	listSubConn       *list.List         // item is subConn
+}
+
+type cachePubConn struct {
+	dcID    ComMessage.CBSType
+	bCanUse bool
+	pubConn *pubConn
+}
+
+const delaymsgDir, delaymsgDB = "data", "dlyMsg.db"
+const MaxAsyncPubOnce = 1000
+
+var (
+	dlyMsgDir   string = delaymsgDir
+	maxInFlight int    = 1
+	bInit              = false
+	chRequest          = make(chan reqCmd)
+	chResponse         = make(chan struct {
+		string
+		error
+	})
+
+	dlyMsgDB    *boltdb.DB
+	dlyMsgLists = make([]*boltdb.List, len(ComMessage.CBSType_name))
+	//diskQ gdq.Interface
+	//currQ gdq.Interface
+
+	ServiceName  string
+	ClientID     string
+	ConsulClient *api.Client
+	SvcUtil      *su.ServiceUtil
+
+	mapDCs map[ComMessage.CBSType]*dataCenter
+
+	// cache which nsCluster the topic will to publish
+	mapTopicConn map[string]cachePubConn // [topic]pubConn.
+
+	inMsgHdlCount, outMsgHdlCount uint32 = 0, 0
+
+	//   define this for that: manageQBusConnection() and publishDelayMsg() /*first delay msg*/
+	// are in two Coroutines, but all call checkBusService()
+	checkBusServiceLock sync.Mutex
+)
+
+func newDataCenter(dcID ComMessage.CBSType) *dataCenter {
+	newDC := &dataCenter{dcID: dcID}
+	newDC.listNSClusterAddr = list.New()
+	newDC.listPublishConn = list.New()
+	newDC.listSubTopic = list.New()
+	newDC.listSubConn = list.New()
+	return newDC
+}
+
+func openDlyMsgLists() error {
+
+	if dlyMsgDir == "" {
+		dlyMsgDir = delaymsgDir
+	}
+	dbName := dlyMsgDir + "/" + delaymsgDB
+
+	if _, err := os.Stat(dlyMsgDir); err != nil {
+		log.Debug("path " + dlyMsgDir + " not exists!  Will create it ")
+		err = os.MkdirAll(dlyMsgDir, os.ModePerm)
+
+		if err != nil {
+			log.Error("Error creating directory: " + err.Error())
+			return err
+		}
+	}
+
+	var err error
+	dlyMsgDB, err = boltdb.Open(dbName, 0644, nil)
+	if err != nil {
+		log.Error("Open delay message DB:" + dbName + " , error:" + err.Error())
+		return err
+	}
+
+	bucket, _ := dlyMsgDB.Bucket([]byte("delayMsgs"))
+
+	dcCount := len(ComMessage.CBSType_name)
+	dlyMsgLists = make([]*boltdb.List, dcCount)
+	for i := 0; i < dcCount; i++ {
+		dcName := ComMessage.CBSType_name[int32(i)]
+		log.Debug("create dlyMsg list[" + dcName + "]")
+		dlyMsgLists[i], err = bucket.List([]byte(dcName))
+		if err != nil {
+			log.Error("bucket.List(" + dcName + ")error:" + err.Error())
+			return err
+		}
+	}
+	return nil
+}
+
+func getKVTopicKey(dcID ComMessage.CBSType, topic string) string {
+	var topic_key string
+	if dcID == ComMessage.CBSType_Own {
+		topic_key = topic
+	} else {
+		topic_key = dcID.String() + "_" + topic
+	}
+	return topic_key
+}
+
+func SetMaxCurrHandleMsgNumber(maxNumber int) {
+	if maxNumber > 0 {
+		if maxNumber <= 5 {
+			maxInFlight = maxNumber
+		} else {
+			maxInFlight = 5
+		}
+		return
+	}
+	maxInFlight = 0
+}
+
+// only for debug
+func SetDelayMsgDir(dir string) {
+	inputDir := path.Clean(dir)
+	if len(inputDir) > 0 && inputDir[0] != '.' {
+		dlyMsgDir = inputDir
+	}
+}
+
+func Init(sutil *su.ServiceUtil, clientID string) {
+	// run Init() only once
+	if !bInit {
+		ServiceName = "QBus"
+
+		mapDCs = make(map[ComMessage.CBSType]*dataCenter)
+		mapDCs[ComMessage.CBSType_Own] = newDataCenter(ComMessage.CBSType_Own)
+
+		mapTopicConn = make(map[string]cachePubConn)
+
+		ClientID = clientID
+		SvcUtil = sutil
+		ConsulClient = su.GetConsulclient()
+
+		log.SetOutLevel(log.LvlInfo)
+		//log.SetOutLevel(log.LvlDebug)
+
+		SetMaxCurrHandleMsgNumber(1)
+
+		// boltdb, delay message list
+		err := openDlyMsgLists()
+
+		if err != nil {
+			os.Exit(-1)
+		}
+
+		log.Info("")
+		log.Info("Init()----------------------------------newest qbh version--------------")
+
+		go handleDelayPubMsg()
+		go manageQBusConnection(sutil)
+
+		bInit = true
+	}
+}
+
+func manageQBusConnection(sutil *su.ServiceUtil) {
+	log.Info("============= go manageQBusConnection")
+	checkQBusService(sutil)
+
+	var req reqCmd
+	t := time.NewTicker(time.Second * 5)
+	for {
+		select {
+		case <-t.C:
+			// check QBus chang every 5 second
+			checkQBusService(sutil)
+		case req = <-chRequest:
+			switch req.cmd {
+			case "unSubscribeAll":
+				// unsubscribe all topics
+				unSubAll()
+			case "unSubTopic":
+				// unsubscribe one topic
+				unsubscribe(req.dcID, req.topic, req.qgroup, req.durable)
+			case "subTopic":
+				// subscribe one topic
+				//err := subscribeTopic(req.dcID,req.topic, req.qgroup, req.durable, req.hdnum, req.startseq, req.msgcb)
+				err := subscribeTopic(req)
+				chResponse <- struct {
+					string
+					error
+				}{"", err}
+			case "pubMsg":
+				err := publish(req.dcID, req.topic, req.pubData)
+				chResponse <- struct {
+					string
+					error
+				}{"", err}
+			case "printListAll":
+				// print all list
+				printListAll()
+			case "printListCluster":
+				// print Cluster List
+				printListCluster()
+			case "printListPubConn":
+				// print PubConn List
+				printListPubConn()
+			case "printListSubTopic":
+				// print SubTopic List
+				printListSubTopic()
+			case "printListSubConn":
+				// print SubConn
+				printListSubConn()
+			}
+		}
+	}
+}
+
+func checkQBusService(sutil *su.ServiceUtil) error {
+	var (
+		listSrvs          []*su.ServiceInfo
+		listNSClusterAddr *list.List
+	)
+
+	//log.Debug("========================== in checkQBusService()")
+	//ClientID = cID
+	checkBusServiceLock.Lock()
+	defer checkBusServiceLock.Unlock()
+
+	for k, v := range mapDCs {
+		if k == ComMessage.CBSType_Own {
+			listSrvs = sutil.GetServiceByNameInternal(ServiceName)
+			//log.Info("DC:" + k.String() + ", sutil.GetServiceByNameInternal(" + ServiceName +")")
+		} else {
+			listSrvs = sutil.GetServiceByNameCrossSystem(k, ServiceName)
+			//log.Info("DC:" + k.String() + ", sutil.GetServiceByNameCrossSystem(" + ServiceName +")")
+		}
+		listNSClusterAddr = v.listNSClusterAddr
+
+		if len(listSrvs) == 0 {
+			if listNSClusterAddr.Len() == 0 {
+				log.Error("DC:" + k.String() + ", No find QBus services, do nothing ")
+				continue
+			}
+
+			log.Error("DC:" + k.String() + ", No find QBus services, Clean connect list ")
+		}
+		//log.Debug("checkQBusService", "get service list", listSrvs)
+
+		for _, value := range listSrvs {
+			//log.Debug("DC:" + k.String() + ", QBus status: ", "status", value.Status)
+			if value.Status != "passing" {
+				continue
+			}
+			var e *list.Element = nil
+			for e = listNSClusterAddr.Front(); e != nil; e = e.Next() {
+
+				qbusAddr := e.Value.(*nsClusterAddr)
+				if qbusAddr.nsClusterID == value.PackageName &&
+					qbusAddr.IP == value.IP && qbusAddr.Port == value.Port {
+
+					// already in list, set the checked flag
+					qbusAddr.isChecked = true
+					break
+				}
+			}
+
+			// new nats-streaming cluster(node)
+			if e == nil {
+				log.Info("will add newQBus  node:", "value", value, "DC", k.String())
+				addNewQBusCluster(v, value)
+			}
+		}
+
+		// check if have some cluster unused
+		checkUnusedCluster(v)
+
+		// reset all check flag
+		for e := listNSClusterAddr.Front(); e != nil; e = e.Next() {
+			qbusAddrNode := e.Value.(*nsClusterAddr)
+			qbusAddrNode.isChecked = false
+		}
+	}
+	return nil
+}
+
+func addNewQBusCluster(dc *dataCenter, sInfo *su.ServiceInfo) {
+	var (
+		qsc stan.Subscription
+		err error
+	)
+
+	dcID := dc.dcID
+	// dataCenter's  lists
+	listPublishConn := dc.listPublishConn
+	listNSClusterAddr := dc.listNSClusterAddr
+	listSubTopic := dc.listSubTopic
+	listSubConn := dc.listSubConn
+
+	// connnect to new nats-streaming-server
+	qbusAddr := "nats://" + sInfo.IP + ":" + strconv.Itoa(sInfo.Port)
+	sc, err := stan.Connect(sInfo.PackageName, ClientID, stan.NatsURL(qbusAddr),
+		stan.MaxPubAcksInflight(MaxAsyncPubOnce),
+		stan.PubAckWait(6*time.Second),
+		stan.Pings(2, 3))
+	if err != nil {
+		log.Error("DC:"+dcID.String()+", Connect to QBus error", "qbusAddr", qbusAddr, "ServiceID", sInfo.PackageName, "ClientID", ClientID, "error", err)
+		return
+	}
+
+	newConn := &pubConn{nsClusterID: sInfo.PackageName, nsConn: sc}
+	// 1. add new connection to publish connection list
+	listPublishConn.PushBack(newConn)
+
+	// 2. record the nats-streaming-server IP/Port
+	newCluster := &nsClusterAddr{nsClusterID: sInfo.PackageName, IP: sInfo.IP, Port: sInfo.Port, isChecked: true}
+	listNSClusterAddr.PushBack(newCluster)
+
+	// 3. subscribt all topics at this new nats-streaming-server
+	for sTopic := listSubTopic.Front(); sTopic != nil; sTopic = sTopic.Next() {
+		tpc := sTopic.Value.(*subTopic)
+
+		var Msgcb stan.MsgHandler = func(msg *stan.Msg) {
+			atomic.AddUint32(&inMsgHdlCount, 1)
+			tpc.msgcb(msg)
+			atomic.AddUint32(&outMsgHdlCount, 1)
+		}
+
+		startOpt := stan.DeliverAllAvailable()
+		//startOpt = stan.StartAt(pb.StartPosition_NewOnly)
+
+		if maxInFlight > 0 {
+			if tpc.manualAck {
+				qsc, err = sc.QueueSubscribe(tpc.topic, tpc.qgroup, Msgcb, startOpt, stan.DurableName(tpc.durable), stan.MaxInflight(maxInFlight), stan.SetManualAckMode())
+			} else {
+				qsc, err = sc.QueueSubscribe(tpc.topic, tpc.qgroup, Msgcb, startOpt, stan.DurableName(tpc.durable), stan.MaxInflight(maxInFlight))
+			}
+		} else {
+			// unlimit handle msgs one time
+			if tpc.manualAck {
+				qsc, err = sc.QueueSubscribe(tpc.topic, tpc.qgroup, Msgcb, startOpt, stan.DurableName(tpc.durable), stan.SetManualAckMode())
+			} else {
+				qsc, err = sc.QueueSubscribe(tpc.topic, tpc.qgroup, Msgcb, startOpt, stan.DurableName(tpc.durable))
+			}
+		}
+
+		if err != nil {
+			log.Error("DC:"+dcID.String()+", QueueSubscribe Error", " error:", err)
+			continue
+		}
+		newSubConn := &subConn{nsClusterID: sInfo.PackageName, topic: tpc.topic, qgroup: tpc.qgroup, durable: tpc.durable, sc: qsc}
+		listSubConn.PushBack(newSubConn)
+	}
+}
+
+func checkUnusedCluster(dc *dataCenter) {
+	var next *list.Element
+
+	// dataCenter's  list
+	listNSClusterAddr := dc.listNSClusterAddr
+
+	for e := listNSClusterAddr.Front(); e != nil; e = next {
+		next = e.Next()
+		qbusAddrNode := e.Value.(*nsClusterAddr)
+
+		if !qbusAddrNode.isChecked {
+			// unused
+			clearClusterConn(dc, qbusAddrNode.nsClusterID)
+			listNSClusterAddr.Remove(e)
+		}
+	}
+}
+
+func clearClusterConn(dc *dataCenter, clusterID string) {
+	var next *list.Element
+
+	// dataCenter's  lists
+	listSubConn := dc.listSubConn
+	listPublishConn := dc.listPublishConn
+
+	// 1. delete subconn at this QBus cluster
+	for e := listSubConn.Front(); e != nil; e = next {
+		next = e.Next()
+		subConnNode := e.Value.(*subConn)
+
+		if subConnNode.nsClusterID == clusterID {
+			// just remove node, no need close for subconn
+			listSubConn.Remove(e)
+		}
+	}
+
+	// 2. close this QBus cluster
+	for e := listPublishConn.Front(); e != nil; e = next {
+		next = e.Next()
+		pubConnNode := e.Value.(*pubConn)
+
+		if pubConnNode.nsClusterID == clusterID {
+			pubConnNode.nsConn.Close()
+			listPublishConn.Remove(e)
+		}
+	}
+}
+
+func UnsubscribeAll() {
+	req := reqCmd{cmd: "unSubscribeAll"}
+	chRequest <- req
+	return
+}
+
+func unSubAll() {
+	var (
+		next         *list.Element
+		listSubConn  *list.List
+		listSubTopic *list.List
+	)
+	//local dataCenter
+
+	for _, v := range mapDCs {
+
+		listSubConn = v.listSubConn
+		listSubTopic = v.listSubTopic
+
+		// 1. unsubscribe all subconn and empty the listSubConn
+		for e := listSubConn.Front(); e != nil; e = next {
+			next = e.Next()
+			subConnNode := e.Value.(*subConn)
+
+			// unsubscribe subconn
+			if subConnNode.sc.IsValid() {
+				subConnNode.sc.Unsubscribe()
+			}
+			listSubConn.Remove(e)
+		}
+
+		// 2. empty the listSubTopic
+		for e := listSubTopic.Front(); e != nil; e = next {
+			next = e.Next()
+			listSubTopic.Remove(e)
+		}
+	}
+}
+
+func UnsubTopic(topic, qgroup, durable string) {
+	req := reqCmd{dcID: ComMessage.CBSType_Own, cmd: "unSubTopic", topic: topic, qgroup: qgroup, durable: durable}
+	chRequest <- req
+	return
+}
+
+func UnsubTopicFromOtherDC(dcID ComMessage.CBSType, topic, qgroup, durable string) {
+	req := reqCmd{dcID: dcID, cmd: "unSubTopic", topic: topic, qgroup: qgroup, durable: durable}
+	chRequest <- req
+	return
+}
+
+func unsubscribe(dcID ComMessage.CBSType, topic, qgroup, durable string) {
+	var next *list.Element
+
+	// dataCenter's lists
+	if _, exists := mapDCs[dcID]; !exists {
+		log.Error("DC:" + dcID.String() + ", " + topic + " can't Unsub because not Sub it before ")
+		return
+	}
+
+	listSubConn := mapDCs[dcID].listSubConn
+	listSubTopic := mapDCs[dcID].listSubTopic
+
+	// 1. unsubscribe and remove from listSubConn
+	for e := listSubConn.Front(); e != nil; e = next {
+		next = e.Next()
+		sn := e.Value.(*subConn)
+
+		if sn.topic == topic && sn.qgroup == qgroup && sn.durable == durable && sn.sc.IsValid() {
+			sn.sc.Unsubscribe()
+			listSubConn.Remove(e)
+		}
+	}
+
+	// 2. remove from listSubTopic
+	for e := listSubTopic.Front(); e != nil; e = next {
+		next = e.Next()
+		tpc := e.Value.(*subTopic)
+
+		if tpc.topic == topic && tpc.qgroup == qgroup && tpc.durable == durable {
+			listSubTopic.Remove(e)
+		}
+	}
+}
+
+func SubTopic(topic, qgroup, durable string, hdnum int, msgcb stan.MsgHandler) error {
+	// default start from seq:1. (Will be effective at the first time, and will be the same as 0 frome the second time)
+	return subTopicAt(ComMessage.CBSType_Own, topic, qgroup, durable, hdnum, 0, false, msgcb)
+}
+
+func SubTopicAt(topic, qgroup, durable string, hdnum int, startSeq uint64, msgcb stan.MsgHandler) error {
+	return subTopicAt(ComMessage.CBSType_Own, topic, qgroup, durable, hdnum, startSeq, false, msgcb)
+}
+
+func SubTopicFromDC(dcID ComMessage.CBSType, topic, qgroup, durable string, hdnum int, msgcb stan.MsgHandler) error {
+	// default start from seq:1. (Will be effective at the first time, and will be the same as 0 frome the second time)
+	if su.GetInstance().IsOwnDC(dcID) {
+		return subTopicAt(ComMessage.CBSType_Own, topic, qgroup, durable, hdnum, 0, false, msgcb)
+	}
+	return subTopicAt(dcID, topic, qgroup, durable, hdnum, 0, false, msgcb)
+}
+
+func SubTopicAtFromDC(dcID ComMessage.CBSType, topic, qgroup, durable string, hdnum int, startSeq uint64, msgcb stan.MsgHandler) error {
+	return subTopicAt(dcID, topic, qgroup, durable, hdnum, startSeq, false, msgcb)
+}
+
+func SubTopicWithManualAck(topic, qgroup, durable string, hdnum int, msgcb stan.MsgHandler) error {
+	return subTopicAt(ComMessage.CBSType_Own, topic, qgroup, durable, hdnum, 0, true, msgcb)
+}
+
+func SubTopicFromDCWithManualAck(dcID ComMessage.CBSType, topic, qgroup, durable string, hdnum int, msgcb stan.MsgHandler) error {
+	// default start from seq:1. (Will be effective at the first time, and will be the same as 0 frome the second time)
+	if su.GetInstance().IsOwnDC(dcID) {
+		return subTopicAt(ComMessage.CBSType_Own, topic, qgroup, durable, hdnum, 0, true, msgcb)
+	}
+	return subTopicAt(dcID, topic, qgroup, durable, hdnum, 0, true, msgcb)
+}
+
+func subTopicAt(dcID ComMessage.CBSType, topic, qgroup, durable string, hdnum int, startSeq uint64, isManualAck bool, msgcb stan.MsgHandler) error {
+	req := reqCmd{dcID: dcID, cmd: "subTopic", topic: topic,
+		qgroup: qgroup, durable: durable,
+		hdnum: hdnum, startseq: startSeq,
+		manualAck: isManualAck, msgcb: msgcb}
+	chRequest <- req
+	ret := <-chResponse
+	return ret.error
+}
+
+//func subscribeTopic(dcID ComMessage.CBSType,topic, qgroup, durable string, hdnum int, startSeq uint64, msgcb stan.MsgHandler) error {
+func subscribeTopic(req reqCmd) error {
+	// get input data
+	dcID := req.dcID
+	topic := req.topic
+	qgroup := req.qgroup
+	durable := req.durable
+	hdnum := req.hdnum
+	startSeq := req.startseq
+	isManualAck := req.manualAck
+	msgcb := req.msgcb
+
+	//var e *list.Element = nil
+	//var consulKVGetOption *api.QueryOptions
+
+	// dataCenter's lists
+	if _, exists := mapDCs[dcID]; !exists {
+		// other dataCenter
+		log.Info("DC:" + dcID.String() + " does not exist, Create it!")
+		mapDCs[dcID] = newDataCenter(dcID)
+		checkQBusService(SvcUtil) // connect it
+	}
+
+	listSubTopic := mapDCs[dcID].listSubTopic
+	listPublishConn := mapDCs[dcID].listPublishConn
+
+	// set
+	/*if dcID == ComMessage.CBSType_Own {
+		consulKVGetOption = nil
+	} else {
+		consulKVGetOption = &api.QueryOptions{ Datacenter: dcID.String()}
+	}*/
+
+	// 1. already sub before ?
+	for e := listSubTopic.Front(); e != nil; e = e.Next() {
+		tpc := e.Value.(*subTopic)
+		if tpc.topic == topic && tpc.qgroup == qgroup && tpc.durable == durable {
+			log.Info("already subscribe", "topic", topic)
+			return errors.New("topic already sub before")
+		}
+	}
+
+	// 2. add new topic in listSubTopic
+	newSubTopic := &subTopic{topic: topic, qgroup: qgroup, durable: durable, hdnum: hdnum,
+		manualAck: isManualAck, msgcb: msgcb}
+	listSubTopic.PushBack(newSubTopic)
+
+	// 3. sub topic on every QBus node with proper order
+	var Msgcb stan.MsgHandler = func(msg *stan.Msg) {
+		atomic.AddUint32(&inMsgHdlCount, 1)
+		msgcb(msg)
+		atomic.AddUint32(&outMsgHdlCount, 1)
+	}
+
+	startOpt := stan.DeliverAllAvailable()
+	//startOpt := stan.StartAt(pb.StartPosition_NewOnly)
+	if startSeq != 0 {
+		startOpt = stan.StartAtSequence(startSeq)
+	}
+
+	// get node_list from consul
+
+	kv := ConsulClient.KV()
+	topic_key := getKVTopicKey(dcID, topic)
+	if pair, _, err := kv.Get(topic_key, nil); err == nil {
+		//if pair, _, err := kv.Get(topic, consulKVGetOption); err == nil {
+		var tpConns topicConns.Allconns
+
+		if pair != nil {
+			// node_list is not null
+			if err = proto.Unmarshal(pair.Value, &tpConns); err == nil {
+
+				// 3.1) get node_list, and subscribe the topic in proper order
+				// sub order is: [1..lastnode,0], the oldest is the first
+				newTpConns := new(topicConns.Allconns)
+				for i := 1; i < len(tpConns.Conns); i++ {
+					newTpConns.Conns = append(newTpConns.Conns, tpConns.Conns[i])
+				}
+				if len(tpConns.Conns) > 0 {
+					newTpConns.Conns = append(newTpConns.Conns, tpConns.Conns[0])
+				}
+
+				// sub topic in order to node_list
+				index := 0
+				if len(newTpConns.Conns) > 0 {
+					for e := listPublishConn.Front(); e != nil; e = e.Next() {
+						ncAddr := e.Value.(*pubConn)
+						if ncAddr.nsClusterID == newTpConns.Conns[index].ClusterID {
+							//log.Info("subscribeTopic() for listPublishConn", "ClusterID", ncAddr.nsClusterID, "newTpConns", newTpConns.Conns[index].ClusterID)
+							// sub topic
+							subscribeAtOneNode(dcID, topic, qgroup, durable, hdnum, ncAddr, isManualAck, Msgcb, startOpt)
+						}
+					}
+
+					// other node which will sub topic to
+					if index+1 < len(newTpConns.Conns) {
+						go subscribeAtNode(dcID, topic, qgroup, durable, hdnum, startSeq, isManualAck, msgcb, newTpConns, index+1)
+					}
+				}
+
+				// 3.2 if have node not in node_list, sub topic on it ether
+				for e := listPublishConn.Front(); e != nil; e = e.Next() {
+					ncAddr := e.Value.(*pubConn)
+
+					isInList := false
+					for i := 0; i < len(newTpConns.Conns); i++ {
+						if ncAddr.nsClusterID == newTpConns.Conns[i].ClusterID {
+							isInList = true
+							break
+						}
+					}
+
+					if !isInList {
+						subscribeAtOneNode(dcID, topic, qgroup, durable, hdnum, ncAddr, isManualAck, Msgcb, startOpt)
+					}
+				}
+			}
+		} else {
+			// pair == nil;   subscribe before publish for a new topic !!!
+			// sub topic on all nodes
+			for e := listPublishConn.Front(); e != nil; e = e.Next() {
+				ncAddr := e.Value.(*pubConn)
+
+				subscribeAtOneNode(dcID, topic, qgroup, durable, hdnum, ncAddr, isManualAck, Msgcb, startOpt)
+				//log.Info("subscribeTopic() for listPublishConn", "ClusterID", ncAddr.nsClusterID)
+			}
+		}
+	}
+	return nil
+}
+
+func subscribeAtOneNode(dcID ComMessage.CBSType, topic, qgroup, durable string,
+	hdnum int, ncAddr *pubConn,
+	isManualAck bool, Msgcb stan.MsgHandler,
+	startOpt stan.SubscriptionOption) {
+	var (
+		qsc stan.Subscription
+		err error
+	)
+
+	// local dataCenter
+	listSubConn := mapDCs[dcID].listSubConn
+
+	for i := 0; i < hdnum; i++ {
+		if maxInFlight > 0 {
+			if isManualAck {
+				qsc, err = ncAddr.nsConn.QueueSubscribe(topic, qgroup, Msgcb, startOpt, stan.DurableName(durable), stan.MaxInflight(maxInFlight), stan.SetManualAckMode())
+			} else {
+				qsc, err = ncAddr.nsConn.QueueSubscribe(topic, qgroup, Msgcb, startOpt, stan.DurableName(durable), stan.MaxInflight(maxInFlight))
+			}
+		} else {
+			// unlimit handle msgs one time
+			if isManualAck {
+				qsc, err = ncAddr.nsConn.QueueSubscribe(topic, qgroup, Msgcb, startOpt, stan.DurableName(durable), stan.SetManualAckMode())
+			} else {
+				qsc, err = ncAddr.nsConn.QueueSubscribe(topic, qgroup, Msgcb, startOpt, stan.DurableName(durable))
+			}
+		}
+		//qsc, err := ncAddr.nsConn.QueueSubscribe(topic, qgroup, msgcb, startOpt)
+		if err != nil {
+			log.Error("QueueSubscribe Error in subscribeTopic()", "error", err)
+			continue
+		}
+		newSubConn := &subConn{nsClusterID: ncAddr.nsClusterID, topic: topic, qgroup: qgroup, durable: durable, sc: qsc}
+		listSubConn.PushBack(newSubConn)
+	}
+}
+
+func subscribeAtNode(dcID ComMessage.CBSType, topic, qgroup, durable string,
+	hdnum int, startSeq uint64,
+	isManualAck bool, msgcb stan.MsgHandler,
+	newTpConns *topicConns.Allconns, index int) {
+	var (
+		oldInCount, inCount, outCount uint32
+		//qsc stan.Subscription
+	)
+	// dataCenter's list
+	listPublishConn := mapDCs[dcID].listPublishConn
+
+	//waiting all msgs at before node be handled
+	oldInCount = atomic.LoadUint32(&inMsgHdlCount)
+	for {
+		time.Sleep(50 * time.Millisecond)
+		inCount = atomic.LoadUint32(&inMsgHdlCount)
+		outCount = atomic.LoadUint32(&outMsgHdlCount)
+		if oldInCount == inCount && inCount == outCount {
+			break
+		}
+		log.Debug("wait all msgs be handled", "oldInCount", oldInCount, "inCount", inCount, "outCount", outCount)
+		oldInCount = inCount
+	}
+
+	var Msgcb stan.MsgHandler = func(msg *stan.Msg) {
+		atomic.AddUint32(&inMsgHdlCount, 1)
+		msgcb(msg)
+		atomic.AddUint32(&outMsgHdlCount, 1)
+	}
+
+	startOpt := stan.DeliverAllAvailable()
+	//startOpt := stan.StartAt(pb.StartPosition_NewOnly)
+	if startSeq != 0 {
+		startOpt = stan.StartAtSequence(startSeq)
+	}
+
+	for e := listPublishConn.Front(); e != nil; e = e.Next() {
+		ncAddr := e.Value.(*pubConn)
+		if ncAddr.nsClusterID == newTpConns.Conns[index].ClusterID {
+			//log.Info("subscribeTopic() for listPublishConn", "ClusterID", ncAddr.nsClusterID, "newTpConns", newTpConns.Conns[index].ClusterID)
+			// sub topic
+			subscribeAtOneNode(dcID, topic, qgroup, durable, hdnum, ncAddr, isManualAck, Msgcb, startOpt)
+		}
+	}
+
+	// other node which will sub topic to
+	if index+1 < len(newTpConns.Conns) {
+		go subscribeAtNode(dcID, topic, qgroup, durable, hdnum, startSeq, isManualAck, msgcb, newTpConns, index+1)
+	}
+}
+
+func Publish(topic string, pubData []byte) error {
+	req := reqCmd{cmd: "pubMsg", dcID: ComMessage.CBSType_Own, topic: topic, pubData: pubData}
+	chRequest <- req
+	ret := <-chResponse
+	return ret.error
+}
+
+func PublishToDC(dcID ComMessage.CBSType, topic string, pubData []byte) error {
+	req := reqCmd{cmd: "pubMsg", dcID: dcID, topic: topic, pubData: pubData}
+	chRequest <- req
+	ret := <-chResponse
+	return ret.error
+}
+
+func publish(dcID ComMessage.CBSType, topic string, pubData []byte) error {
+	log.Debug("in publish()", "topic:", topic, "pubData", string(pubData))
+	mapKey := dcID.String() + "_" + topic
+	if pCon, ok := mapTopicConn[mapKey]; ok {
+		if pCon.pubConn != nil && pCon.bCanUse {
+			if err := pCon.pubConn.nsConn.Publish(topic, pubData); err == nil {
+				// success
+				log.Debug("published OK!", "topic:", topic, "  ClusterID---", pCon.pubConn.nsClusterID)
+				return nil
+			} /*else {       // else just for debug ############
+				log.Info("       in publish() --7 fail")
+			}*/
+		}
+	} else {
+		dlyMsgLen, err := dlyMsgLists[dcID].Len()
+		if err != nil {
+			// if error, continue send current pub msg
+			log.Error("get dlymsg length error, DC["+ComMessage.CBSType_name[int32(dcID)]+"] err:", err.Error())
+			dlyMsgLen = 0
+		}
+		if dlyMsgLen == 0 && firstTimeToTryPubOneMsg(dcID, topic, pubData) {
+			// pub message success
+			log.Debug("First published OK!", "topic:", topic)
+			return nil
+		}
+		// just for debug
+		//if dlyMsgLen == 0 {
+		//	log.Info("       in publish() --6.1  firstTimeToTryPubOneMsg fail")
+		//} else {
+		//	log.Info("       in publish() --6.2 have delay msg")
+		//}
+
+		log.Debug("First published failed!, in delay queue", "topic:", topic)
+		newCache := cachePubConn{dcID: dcID, bCanUse: false, pubConn: nil}
+		mapTopicConn[mapKey] = newCache
+
+	}
+
+	// delay send
+	// Put msg into diskQueue, which will be handled by handleDelayPubMsg()
+	log.Debug("delayPubMsg", "topic:", topic)
+	delayMsg := new(topicConns.Delaymsg)
+	delayMsg.DcID = int32(dcID)
+	delayMsg.Topic = topic
+	delayMsg.Msg = pubData
+	if msgValue, err := proto.Marshal(delayMsg); err == nil {
+		//if err := diskQ.Put(msgValue); err != nil {
+		if err := dlyMsgLists[dcID].RPush([]byte(msgValue)); err != nil {
+			log.Error("disk queue put Error:" + err.Error() + " Topic[" + topic + "] msg[" + string(pubData) + "]")
+		}
+		//log.Debug("Put Into Msg:topic["+topic +"] msg[" +string(pubData)+"]")
+	}
+
+	return errors.New("publish will delay")
+}
+
+func handleDelayPubMsg() {
+
+	var delayMsg topicConns.Delaymsg
+	log.Info("============= go handleDelayPubMsg")
+
+	dcCount := len(ComMessage.CBSType_name)
+
+	// watch diskQueue, and publish msgs until nil if have
+	for {
+		for i := 0; i < dcCount; i++ {
+			dlylist := dlyMsgLists[i]
+			ret := false
+
+			length, err := dlylist.Len()
+			for ; err == nil && length > 0; length, err = dlylist.Len() {
+				// get the head msg
+				queueOut, _ := dlylist.Index(0)
+
+				if err = proto.Unmarshal(queueOut, &delayMsg); err == nil {
+					ret = publishDelayMsg(ComMessage.CBSType(delayMsg.DcID), delayMsg.Topic, []byte(delayMsg.Msg))
+				} else {
+					// data maybe error, skip it
+				}
+
+				if ret {
+					// publish OK, no need keep the send msg
+					//log.Info("handleDelayPubMsg()  publish ok, next one ---" + ComMessage.CBSType(i).String())
+					queueOut, _ = dlylist.LPop()
+
+					// Async Publish other messages  ============ BEGIN ====================
+					var isContinue = true
+					var waitgroup sync.WaitGroup
+					var glock sync.Mutex
+					//var total = 0
+
+					acb := func(lguid string, err error) {
+						defer waitgroup.Done()
+
+						glock.Lock()
+						defer glock.Unlock()
+
+						//log.Info("Received ACK for guid: [" +lguid+"]")
+						//total++
+						//if total % 1000 ==0 {
+						//	log.Debug("["+lguid+"]" + " ["+strconv.Itoa(total)+"]"+" Async Ack Number")
+						//}
+						if err != nil {
+							//log.Error("["+lguid+"]" + " ["+strconv.Itoa(total)+"]"+ err.Error())
+							isContinue = false
+						}
+
+					}
+
+					mapKey := ComMessage.CBSType(delayMsg.DcID).String() + "_" + delayMsg.Topic
+					if pCon, ok := mapTopicConn[mapKey]; ok && pCon.pubConn != nil {
+						//k := 0
+						len, err := dlylist.Len()
+						for ; err == nil && len > 0; len, err = dlylist.Len() {
+							count := len
+							if len > MaxAsyncPubOnce {
+								count = MaxAsyncPubOnce
+							}
+
+							err = dlylist.Range(0, count-1, func(i int64, value []byte, quit *bool) {
+								if err = proto.Unmarshal(value, &delayMsg); err == nil {
+									glock.Lock()
+									guid, err := pCon.pubConn.nsConn.PublishAsync(delayMsg.Topic, []byte(delayMsg.Msg), acb)
+									//k++
+									//if k >0 && k%1000 ==0 {
+									//	//log.Info("[" + guid + "]" + "[" + string(delayMsg.Msg) + "]")
+									//	log.Debug("[" + guid + "]" + "[" + strconv.Itoa(k) + "]"+"Pub Delaymsg")
+									//}
+									glock.Unlock()
+
+									if guid == "" {
+										log.Error("Expected non-empty guid to be returned.")
+									}
+
+									if err != nil {
+										log.Error("Error during async publish: " + err.Error())
+										isContinue = false
+									} else {
+										waitgroup.Add(1)
+									}
+
+								} else {
+									// data maybe error, skip it
+								}
+							})
+
+							waitgroup.Wait()
+							if isContinue == false {
+								break
+							}
+
+							dlylist.LBatchDelete(count)
+							//for ;count >0;count-- {
+							//	queueOut,_  = dlylist.LPop()
+							//}
+						}
+
+					}
+
+					//log.Debug("Total Async Publish:" + strconv.Itoa(total))
+
+					// =============================== END ========================================
+
+				} else {
+					// failed, stop publish
+					//log.Info("handleDelayPubMsg()  failed,stop pub ---" + ComMessage.CBSType(i).String())
+					break
+				}
+			}
+
+			// list for this DataCenter is empty
+			if length == int64(0) {
+				// set all map cache can use
+				for k, v := range mapTopicConn {
+					if v.pubConn != nil && v.bCanUse == false && v.dcID == ComMessage.CBSType(i) {
+						v.bCanUse = true
+						mapTopicConn[k] = v
+						//log.Info("handleDelayPubMsg()  set mapTopicConn["+k +"] bCanUse to True ---" + ComMessage.CBSType(i).String())
+					}
+				}
+			}
+		}
+
+		//log.Debug("queue is Empty, Sleep 1 second")
+		time.Sleep(1 * time.Second)
+	}
+}
+
+func publishDelayMsg(dcID ComMessage.CBSType, topic string, pubData []byte) bool {
+	// local dataCenter
+	//listPublishConn := mapDCs[ComMessage.CBSType_Own].listPublishConn
+	log.Debug("in publishDelayMsg()", "topic:", topic)
+
+	mapKey := dcID.String() + "_" + topic
+	if pCon, ok := mapTopicConn[mapKey]; ok {
+		if pCon.pubConn != nil {
+			err := pCon.pubConn.nsConn.Publish(topic, pubData)
+			if err == nil {
+				// success
+				log.Debug("delayMsg publish success", "topic:", topic, "message", string(pubData), "  ClusterID---", pCon.pubConn.nsClusterID)
+				return true
+			} else {
+				// the conn may be invalid, delete
+				log.Debug("Delete mapTopicConn", "topic:", topic, "  ClusterID---", pCon.pubConn.nsClusterID)
+				delete(mapTopicConn, mapKey)
+			}
+		}
+	}
+
+	// not in map, means:
+	//   a. publish msg with this topic first time in this process
+	//   b. or need switch another valid nats-streaming-server node
+
+	// if need create dataCenter's lists (first time)
+	if _, exists := mapDCs[dcID]; !exists {
+		// other dataCenter
+		log.Info("DC:" + dcID.String() + " does not exist, Create it!")
+		mapDCs[dcID] = newDataCenter(dcID)
+		checkQBusService(SvcUtil) // connect it
+	}
+
+	kv := ConsulClient.KV()
+	return tryPubOneMessage(dcID, kv, topic, pubData)
+}
+
+func tryPubOneMessage(dcID ComMessage.CBSType, kv *api.KV, topic string, pubData []byte) bool {
+
+	// 1. get store node_list from consul
+	listPublishConn := mapDCs[dcID].listPublishConn
+
+	topic_key := getKVTopicKey(dcID, topic)
+	pair, meta, err := kv.Get(topic_key, nil)
+	if err != nil {
+		// consul should not be error !
+		log.Error("consul get kv error! in tryPubOneMessage(), will retry 1 second later")
+
+		return false
+	}
+
+	// 2. if the first node can use, success
+	var tpConns topicConns.Allconns
+	if pair != nil { // get value
+		if err := proto.Unmarshal(pair.Value, &tpConns); err == nil && len(tpConns.Conns) > 0 {
+			// get a value
+			var next *list.Element = nil
+			for e := listPublishConn.Front(); e != nil; e = next {
+				next = e.Next()
+
+				ncAddr := e.Value.(*pubConn)
+				if ncAddr.nsClusterID == tpConns.Conns[0].ClusterID {
+					if err := ncAddr.nsConn.Publish(topic, pubData); err == nil {
+						// publish success, insert map if need
+						mapKey := dcID.String() + "_" + topic
+						pConn, ok := mapTopicConn[mapKey]
+						if !ok {
+							//get empty.  first time, or after delete first time send
+							newConn := *ncAddr
+							newCache := cachePubConn{dcID: dcID, bCanUse: true, pubConn: &newConn}
+							mapTopicConn[mapKey] = newCache
+							log.Debug("in tryPubOneMessage() -3 --DC:"+dcID.String(), "topic:", topic, "clusterID", ncAddr.nsClusterID)
+						} else {
+							// req from publidDelayMsg()
+							if pConn.pubConn == nil || pConn.bCanUse == true {
+								newConn := *ncAddr
+								newCache := cachePubConn{dcID: dcID, bCanUse: false, pubConn: &newConn}
+								mapTopicConn[mapKey] = newCache
+								log.Debug("in tryPubOneMessage() -4 --DC:"+dcID.String(), "topic:", topic, "clusterID", ncAddr.nsClusterID)
+							}
+						}
+						return true
+					} else {
+						log.Error("tryPubOneMessage --DC:"+dcID.String(), "topic", topic, "clusterID", ncAddr.nsClusterID, "error", err)
+					}
+				}
+			}
+		}
+	}
+
+	// 3. make new node_list
+	newTpConns := new(topicConns.Allconns)
+	if pair != nil {
+		// publish failed
+		// 3.1) move the nodes forward one step
+		for i := 1; i < len(tpConns.Conns); i++ {
+			newConn := new(topicConns.Conn)
+			newConn.ClusterID = *proto.String(tpConns.Conns[i].ClusterID)
+			newTpConns.Conns = append(newTpConns.Conns, newConn)
+		}
+
+		// 3.2) append new cluster node if have
+		var next *list.Element = nil
+		for e := listPublishConn.Front(); e != nil; e = next {
+			next = e.Next()
+			ncAddr := e.Value.(*pubConn)
+
+			isIn := false
+			for i := 0; i < len(tpConns.Conns); i++ {
+				if ncAddr.nsClusterID == tpConns.Conns[i].ClusterID {
+					isIn = true
+					break
+				}
+			}
+
+			if isIn == false {
+				// new cluster node, append
+				newConn := new(topicConns.Conn)
+				newConn.ClusterID = *proto.String(ncAddr.nsClusterID)
+				newTpConns.Conns = append(newTpConns.Conns, newConn)
+			}
+		}
+
+		// 3.3) append the failed node at tail
+		if len(tpConns.Conns) > 0 {
+			newConn := new(topicConns.Conn)
+			newConn.ClusterID = *proto.String(tpConns.Conns[0].ClusterID)
+			newTpConns.Conns = append(newTpConns.Conns, newConn)
+		}
+
+	} else {
+		// first time, append all valid cluster nodes
+		var next *list.Element = nil
+		for e := listPublishConn.Front(); e != nil; e = next {
+			next = e.Next()
+
+			ncAddr := e.Value.(*pubConn)
+			newConn := new(topicConns.Conn)
+			newConn.ClusterID = *proto.String(ncAddr.nsClusterID)
+			newTpConns.Conns = append(newTpConns.Conns, newConn)
+		}
+	}
+
+	// 4. save to consul kv
+	kvValue, err := proto.Marshal(newTpConns)
+	if err == nil {
+		p := &api.KVPair{Key: topic_key, Value: kvValue}
+
+		if pair != nil {
+			// change kv in consul. if failed will do nothing, and have another chance one second after
+			p.ModifyIndex = meta.LastIndex
+			kv.CAS(p, nil)
+		} else {
+			// first time, put new kv in consul
+			kv.Put(p, nil)
+		}
+	}
+
+	return false
+}
+
+func firstTimeToTryPubOneMsg(dcID ComMessage.CBSType, topic string, pubData []byte) bool {
+
+	// dataCenter's lists
+	if _, exists := mapDCs[dcID]; !exists {
+		// other dataCenter
+		log.Info("DC:" + dcID.String() + " does not exist, Create it!")
+		mapDCs[dcID] = newDataCenter(dcID)
+		checkQBusService(SvcUtil) // connect it
+	}
+
+	// 1. get store node_list from consul
+	listPublishConn := mapDCs[dcID].listPublishConn
+	kv := ConsulClient.KV()
+
+	topic_key := getKVTopicKey(dcID, topic)
+	pair, _, err := kv.Get(topic_key, nil)
+	if err != nil {
+		// consul should not be error !
+		log.Error("consul get kv error! in firstTimeToTryPubOneMsg(), return false")
+		return false
+	}
+
+	if pair == nil {
+		// first time, append all valid cluster nodes
+		newTpConns := new(topicConns.Allconns)
+		var next *list.Element = nil
+		for e := listPublishConn.Front(); e != nil; e = next {
+			next = e.Next()
+
+			ncAddr := e.Value.(*pubConn)
+			newConn := new(topicConns.Conn)
+			newConn.ClusterID = *proto.String(ncAddr.nsClusterID)
+			newTpConns.Conns = append(newTpConns.Conns, newConn)
+		}
+
+		// save to consul kv
+		kvValue, err := proto.Marshal(newTpConns)
+		if err == nil {
+			p := &api.KVPair{Key: topic_key, Value: kvValue}
+			// first time, put new kv in consul
+			kv.Put(p, nil)
+		}
+	}
+
+	ret := tryPubOneMessage(dcID, kv, topic, pubData)
+	return ret
+}
+
+func CloseConn() {
+	log.Debug("enter CloseConn()")
+
+	for k, _ := range mapDCs {
+		// dataCenter's list
+		listPublishConn := mapDCs[k].listPublishConn
+
+		//just close streaming connection.
+		// no need close subscribe connection, unless will unsubscribe
+		for e := listPublishConn.Front(); e != nil; e = e.Next() {
+			qa := e.Value.(*pubConn)
+			//log.Info("Close connect:","DC:",k.String()," nsClusterID",qa.nsClusterID)
+			qa.nsConn.Close()
+		}
+	}
+
+	// delay message lists
+	dcCount := len(ComMessage.CBSType_name)
+
+	for i := 0; i < dcCount; i++ {
+		dlylist := dlyMsgLists[i]
+		l1, err := dlylist.Len()
+		for ; err == nil && l1 > 0; l1, err = dlylist.Len() {
+			time.Sleep(50 * time.Millisecond)
+			l2, _ := dlylist.Len()
+			if l2 == l1 || l2 == int64(0) {
+				break
+			}
+		}
+		// l2<l1 , still publishing delay message, wait
+	}
+	dlyMsgDB.Close()
+}
+
+func PrintListAll() {
+	req := reqCmd{cmd: "printListAll"}
+	chRequest <- req
+	return
+}
+
+func printListAll() {
+	printListCluster()
+	printListPubConn()
+	printListSubTopic()
+	printListSubConn()
+}
+
+func PrintListCluster() {
+	req := reqCmd{cmd: "printListCluster"}
+	chRequest <- req
+	return
+}
+
+func printListCluster() {
+
+	// local dataCenter
+	listNSClusterAddr := mapDCs[ComMessage.CBSType_Own].listNSClusterAddr
+	log.Info("Print ClusterAddr List:")
+	for e := listNSClusterAddr.Front(); e != nil; e = e.Next() {
+		qa := e.Value.(*nsClusterAddr)
+		log.Info("Node:", "ClusterID", qa.nsClusterID, "IP", qa.IP, "Port", qa.Port, "isChecked", qa.isChecked)
+	}
+}
+
+func PrintListPubConn() {
+	req := reqCmd{cmd: "printListPubConn"}
+	chRequest <- req
+	return
+}
+
+func printListPubConn() {
+
+	// local dataCenter
+	listPublishConn := mapDCs[ComMessage.CBSType_Own].listPublishConn
+
+	log.Info("Print PubConn List:")
+	for e := listPublishConn.Front(); e != nil; e = e.Next() {
+		qa := e.Value.(*pubConn)
+		log.Info("Node:", "ClusterID", qa.nsClusterID)
+	}
+}
+
+func PrintListSubTopic() {
+	req := reqCmd{cmd: "printListSubTopic"}
+	chRequest <- req
+	return
+}
+
+func printListSubTopic() {
+
+	// local dataCenter
+	listSubTopic := mapDCs[ComMessage.CBSType_Own].listSubTopic
+
+	log.Info("Print SubTopic List:")
+	for e := listSubTopic.Front(); e != nil; e = e.Next() {
+		qa := e.Value.(*subTopic)
+		log.Info("Node:", "topic", qa.topic, "qgroup", qa.qgroup, "durable", qa.durable)
+	}
+}
+
+func PrintListSubConn() {
+	req := reqCmd{cmd: "printListSubConn"}
+	chRequest <- req
+	return
+}
+
+func printListSubConn() {
+
+	// local dataCenter
+	listSubConn := mapDCs[ComMessage.CBSType_Own].listSubConn
+
+	log.Info("Print SubConn List:")
+	for e := listSubConn.Front(); e != nil; e = e.Next() {
+		qa := e.Value.(*subConn)
+		log.Info("Node:", "ClusterID", qa.nsClusterID, "topic", qa.topic, "qgroup", qa.qgroup, "durable", qa.durable)
+	}
+}
